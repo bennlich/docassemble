@@ -1,5 +1,55 @@
 # Change Log
 
+## [0.4.41] - 2019-05-02
+### Added
+- The `get_docx_variables()` method of `DAFile` and other file
+  objects.
+### Fixed
+- ProxyFix settings for Docker containers behind reverse proxies.
+
+## [0.4.40] - 2019-04-29
+### Fixed
+- Python 2.7 error.
+
+## [0.4.39] - 2019-04-29
+### Fixed
+- Variables could not be converted to JSON where `None` used as
+  dictionary key.
+- Compile errors due to unused non-Python-3-compliant code in copy of
+  rtfng.
+- Playground package description formatted as text area, which
+  resulted in newlines that caused problems when uploading to GitHub.
+
+## [0.4.38] - 2019-04-25
+### Added
+- The `single_to_double_newlines()` function.
+- The `get_pdf_fields()` method of `DAFile` and other file objects.
+- The `playground examples` directive in the Configuration.
+- The `new markdown to docx` directive in the Configuration.
+### Changed
+- Style of chat messages updated; content of message from the monitor
+  is now contained in the notification received by the end user while
+  looking at a question.
+### Fixed
+- Python 3.5 error in utility function for Azure Blob Storage.
+
+## [0.4.37] - 2019-04-23
+### Fixed
+- Error affecting Python 2.7.
+
+## [0.4.36] - 2019-04-23
+### Changed
+- Syntax highlighting and word wrap for interview phrase translation files.
+- New style for chat messages.
+### Fixed
+- PAM failure in cron on Amazon Linux.
+- Link to show help tab called wrong JavaScript function.
+
+## [0.4.35] - 2019-04-20
+### Added
+- The `translations` block and the interview phrase translation file
+  download utility.
+
 ## [0.4.34] - 2019-04-16
 ### Changed
 - Downgraded s3cmd.

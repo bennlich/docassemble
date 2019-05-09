@@ -760,6 +760,8 @@ import qrcode
 import qrcode.image.svg
 from io import BytesIO
 import links_from_header
+import xlsxwriter
+import hashlib
 from distutils.version import LooseVersion
 from subprocess import call, Popen, PIPE
 import subprocess
@@ -811,6 +813,7 @@ from jinja2.exceptions import TemplateError
 import uuid
 from bs4 import BeautifulSoup
 import collections
+import pandas
 
 import importlib
 modules_to_import = daconfig.get('preloaded modules', None)
@@ -1156,7 +1159,7 @@ def get_url_from_file_reference(file_reference, **kwargs):
         remove_question_package(kwargs)
         return(url_for('new_session', **kwargs))
     elif file_reference == 'help':
-        return('javascript:show_help_tab()');
+        return('javascript:daShowHelpTab()');
     elif file_reference == 'interview':
         remove_question_package(kwargs)
         return(url_for('index', **kwargs))
@@ -1530,21 +1533,26 @@ def copy_playground_modules():
         with open(os.path.join(local_dir, '__init__.py'), 'w', encoding='utf-8') as the_file:
             the_file.write(init_py_file)
 
-def proc_example_list(example_list, examples):
+def proc_example_list(example_list, package, directory, examples):
     for example in example_list:
         if type(example) is dict:
             for key, value in example.items():
                 sublist = list()
-                proc_example_list(value, sublist)
+                proc_example_list(value, package, directory, sublist)
                 examples.append({'title': str(key), 'list': sublist})
                 break
             continue
         result = dict()
         result['id'] = example
-        result['interview'] = url_for('index', reset=1, i="docassemble.base:data/questions/examples/" + example + ".yml")
-        example_file = 'docassemble.base:data/questions/examples/' + example + '.yml'
-        result['image'] = url_for('static', filename='examples/' + example + ".png")
+        result['interview'] = url_for('index', reset=1, i=package + ":data/questions/" + directory + example + ".yml")
+        example_file = package + ":data/questions/" + directory + example + '.yml'
+        if package == 'docassemble.base':
+            result['image'] = url_for('static', filename=directory + example + ".png")
+        else:
+            result['image'] = url_for('package_static', package=package, filename=example + ".png")
+        logmessage("Giving it " + example_file)
         file_info = get_info_from_file_reference(example_file)
+        logmessage("Got back " + file_info['fullpath'])
         start_block = 1
         end_block = 2
         if 'fullpath' not in file_info or file_info['fullpath'] is None:
@@ -1598,13 +1606,30 @@ def proc_example_list(example_list, examples):
     
 def get_examples():
     examples = list()
-    example_list_file = get_info_from_file_reference('docassemble.base:data/questions/example-list.yml')
-    if 'fullpath' in example_list_file and example_list_file['fullpath'] is not None:
-        example_list = list()
-        with open(example_list_file['fullpath'], 'rU', encoding='utf-8') as fp:
-            content = fp.read()
-            content = fix_tabs.sub('  ', content)
-            proc_example_list(ruamel.yaml.safe_load(content), examples)
+    file_list = daconfig.get('playground examples', ['docassemble.base:data/questions/example-list.yml'])
+    if not isinstance(file_list, list):
+        file_list = [file_list]
+    for the_file in file_list:
+        if not isinstance(the_file, string_types):
+            continue
+        example_list_file = get_info_from_file_reference(the_file)
+        if 'fullpath' in example_list_file and example_list_file['fullpath'] is not None:
+            if 'package' in example_list_file:
+                the_package = example_list_file['package']
+            else:
+                continue
+            if the_package == 'docassemble.base':
+                the_directory = 'examples/'
+            else:
+                the_directory = ''
+            if os.path.exists(example_list_file['fullpath']):
+                try:
+                    with open(example_list_file['fullpath'], 'rU', encoding='utf-8') as fp:
+                        content = fp.read()
+                        content = fix_tabs.sub('  ', content)
+                        proc_example_list(ruamel.yaml.safe_load(content), the_package, the_directory, examples)
+                except Exception as the_err:
+                    logmessage("There was an error loading the Playground examples:" + text_type(the_err))
     #logmessage("Examples: " + str(examples))
     return(examples)
 
@@ -2287,7 +2312,6 @@ def make_navbar(status, steps, show_login, chat_info, debug_mode, extra_class=No
     extra_help_message = word("Help is available for this question")
     phone_sr = word("Phone help")
     phone_message = word("Phone help is available")
-    chat_message = word("Live chat is available")
     chat_sr = word("Live chat")
     source_message = word("How this question came to be asked")
     if debug_mode:
@@ -2300,7 +2324,7 @@ def make_navbar(status, steps, show_login, chat_info, debug_mode, extra_class=No
             navbar += '<li class="nav-item"><a class="pointer no-outline nav-link helptrigger" href="#help" data-target="#help" id="helptoggle" title=' + json.dumps(help_message) + '>' + help_label + '</a></li>'
         else:
             navbar += '<li class="nav-item"><a class="pointer no-outline nav-link helptrigger" href="#help" data-target="#help" id="helptoggle" title=' + json.dumps(extra_help_message) + '><span class="daactivetext">' + help_label + ' <i class="fas fa-star"></i></span></a></li>'
-    navbar += '<li class="nav-item invisible" id="daPhoneAvailable"><a role="button" href="#help" data-target="#help" title=' + json.dumps(phone_message) + ' class="nav-link pointer helptrigger"><i class="fas fa-phone chat-active"></i><span class="sr-only">' + phone_sr + '</span></a></li><li class="nav-item invisible" id="daChatAvailable"><a href="#help" data-target="#help" title=' + json.dumps(chat_message) + ' class="nav-link pointer helptrigger" ><i class="fas fa-comment-alt"></i><span class="sr-only">' + chat_sr + '</span></a></li></ul>'
+    navbar += '<li class="nav-item invisible" id="daPhoneAvailable"><a role="button" href="#help" data-target="#help" title=' + json.dumps(phone_message) + ' class="nav-link pointer helptrigger"><i class="fas fa-phone chat-active"></i><span class="sr-only">' + phone_sr + '</span></a></li><li class="nav-item invisible" id="daChatAvailable"><a href="#help" data-target="#help" class="nav-link pointer helptrigger" ><i class="fas fa-comment-alt"></i><span class="sr-only">' + chat_sr + '</span></a></li></ul>'
     navbar += """
         <button id="mobile-toggler" type="button" class="navbar-toggler ml-auto" data-toggle="collapse" data-target="#navbar-collapse">
           <span class="navbar-toggler-icon"></span><span class="sr-only">""" + word("Display the menu") + """</span>
@@ -7076,7 +7100,7 @@ def index(action_argument=None):
           }
         });
       }
-      function daInformAbout(subject){
+      function daInformAbout(subject, chatMessage){
         if (subject in daInformed || (subject != 'chatmessage' && !daIsUser)){
           return;
         }
@@ -7097,7 +7121,8 @@ def index(action_argument=None):
         }
         else if (subject == 'chatmessage'){
           target = "#daChatAvailable a";
-          message = """ + json.dumps(word("A chat message has arrived.")) + """;
+          //message = """ + json.dumps(word("A chat message has arrived.")) + """;
+          message = chatMessage;
         }
         else if (subject == 'phone'){
           target = "#daPhoneAvailable a";
@@ -7110,7 +7135,12 @@ def index(action_argument=None):
           daInformed[subject] = 1;
           daInformedChanged = true;
         }
-        $(target).popover({"content": message, "placement": "bottom", "trigger": "manual", "container": "body"});
+        if (subject == 'chatmessage'){
+          $(target).popover({"content": message, "placement": "bottom", "trigger": "manual", "container": "body", "title": """ + json.dumps(word("New chat message")) + """});
+        }
+        else {
+          $(target).popover({"content": message, "placement": "bottom", "trigger": "manual", "container": "body", "title": """ + json.dumps(word("Live chat is available")) + """});
+        }
         $(target).popover('show');
         setTimeout(function(){
           $(target).popover('dispose');
@@ -7127,10 +7157,10 @@ def index(action_argument=None):
         var newDiv = document.createElement('li');
         $(newDiv).addClass("list-group-item");
         if (data.is_self){
-          $(newDiv).addClass("list-group-item-warning dalistright");
+          $(newDiv).addClass("list-group-item-primary dalistright");
         }
         else{
-          $(newDiv).addClass("list-group-item-info");
+          $(newDiv).addClass("list-group-item-secondary dalistleft");
         }
         //var newSpan = document.createElement('span');
         //$(newSpan).html(data.message);
@@ -7321,7 +7351,7 @@ def index(action_argument=None):
                 daChatHistory.push(arg.data);
                 daPublishMessage(arg.data);
                 daScrollChat();
-                daInformAbout('chatmessage');
+                daInformAbout('chatmessage', arg.data.message);
             });
             daSocket.on('newpage', function(incoming) {
                 //console.log("newpage received");
@@ -10075,6 +10105,7 @@ def observer():
     userid = request.args.get('userid', None)
     observation_script = """
     <script>
+      var daMapInfo = null;
       var daWhichButton = null;
       var daSendChanges = false;
       var daNoConnectionCount = 0;
@@ -10082,11 +10113,147 @@ def observer():
       var daConfirmed = false;
       var daObserverChangesInterval = null;
       var daInitialized = false;
+      var daShowingSpinner = false;
+      var daSpinnerTimeout = null;
       var daShowingHelp = false;
       var daInformedChanged = false;
       var daDisable = null;
       var daCsrf = """ + json.dumps(generate_csrf()) + """;
+      var daShowIfInProcess = false;
+      var daFieldsToSkip = ['_checkboxes', '_empties', '_ml_info', '_back_one', '_files', '_files_inline', '_question_name', '_the_image', '_save_as', '_success', '_datatypes', '_event', '_visible', '_tracker', '_track_location', '_varnames', '_next_action', '_next_action_to_set', 'ajax', 'json', 'informed', 'csrf_token', '_action', '_order_changes', '_collect'];
+      var daVarLookup;
+      var daVarLookupRev;
+      var daValLookup;
       var daTargetDiv = "#dabody";
+      var locationBar = """ + json.dumps(url_for('index', i=i)) + """;
+      var daPostURL = """ + json.dumps(url_for('index', i=i, _external=True)) + """;
+      function daShowSpinner(){
+        if ($("#question").length > 0){
+          $('<div id="daSpinner" class="spinner-container top-for-navbar"><div class="container"><div class="row"><div class="col-centered"><span class="da-spinner text-muted"><i class="fas fa-spinner fa-spin"><\/i><\/span><\/div><\/div><\/div><\/div>').appendTo(daTargetDiv);
+        }
+        else{
+          var newSpan = document.createElement('span');
+          var newI = document.createElement('i');
+          $(newI).addClass("fas fa-spinner fa-spin");
+          $(newI).appendTo(newSpan);
+          $(newSpan).attr("id", "daSpinner");
+          $(newSpan).addClass("da-sig-spinner text-muted top-for-navbar");
+          $(newSpan).appendTo("#sigtoppart");
+        }
+        daShowingSpinner = true;
+      }
+      function daHideSpinner(){
+        $("#daSpinner").remove();
+        daShowingSpinner = false;
+        daSpinnerTimeout = null;
+      }
+      function getField(fieldName){
+        if (typeof daValLookup[fieldName] == "undefined"){
+          var fieldNameEscaped = btoa(fieldName);//.replace(/(:|\.|\[|\]|,|=)/g, "\\\\$1");
+          if ($("[name='" + fieldNameEscaped + "']").length == 0 && typeof daVarLookup[btoa(fieldName)] != "undefined"){
+            fieldName = daVarLookup[btoa(fieldName)];
+            fieldNameEscaped = fieldName;//.replace(/(:|\.|\[|\]|,|=)/g, "\\\\$1");
+          }
+          var varList = $("[name='" + fieldNameEscaped + "']");
+          if (varList.length == 0){
+            varList = $("input[type='radio'][name='" + fieldNameEscaped + "']");
+          }
+          if (varList.length == 0){
+            varList = $("input[type='checkbox'][name='" + fieldNameEscaped + "']");
+          }
+          if (varList.length > 0){
+            elem = varList[0];
+          }
+          else{
+            return null;
+          }
+        }
+        else {
+          elem = daValLookup[fieldName];
+        }
+        return elem;
+      }
+      function setField(fieldName, val){
+        var elem = getField(fieldName);
+        if (elem == null){
+          console.log('setField: reference to non-existent field ' + fieldName);
+          return;
+        }
+        if ($(elem).attr('type') == "checkbox"){
+          if (val){
+            if ($(elem).prop('checked') != true){
+              $(elem).prop('checked', true);
+              $(elem).trigger('change');
+            }
+          }
+          else{
+            if ($(elem).prop('checked') != false){
+              $(elem).prop('checked', false);
+              $(elem).trigger('change');
+            }
+          }
+        }
+        else if ($(elem).attr('type') == "radio"){
+          var fieldNameEscaped = $(elem).attr('name').replace(/(:|\.|\[|\]|,|=)/g, "\\\\$1");
+          var wasSet = false;
+          $("input[name='" + fieldNameEscaped + "']").each(function(){
+            if ($(this).val() == val){
+              if ($(this).prop('checked') != true){
+                $(this).prop('checked', true);
+                $(this).trigger('change');
+              }
+              wasSet = true;
+              return false;
+            }
+          });
+          if (!wasSet){
+            console.log('setField: could not set radio button ' + fieldName + ' to ' + val);
+          }
+        }
+        else{
+          if ($(elem).val() != val){
+            $(elem).val(val);
+            $(elem).trigger('change');
+          }
+        }
+      }
+      function val(fieldName){
+        var elem = getField(fieldName);
+        if (elem == null){
+          return null;
+        }
+        var showifParents = $(elem).parents(".jsshowif");
+        if (showifParents.length !== 0 && !($(showifParents[0]).data("isVisible") == '1')){
+          theVal = null;
+        }
+        else if ($(elem).attr('type') == "checkbox"){
+          if ($(elem).prop('checked')){
+            theVal = true;
+          }
+          else{
+            theVal = false;
+          }
+        }
+        else if ($(elem).attr('type') == "radio"){
+          var fieldNameEscaped = $(elem).attr('name').replace(/(:|\.|\[|\]|,|=)/g, "\\\\$1");
+          theVal = $("input[name='" + fieldNameEscaped + "']:checked").val();
+          if (typeof(theVal) == 'undefined'){
+            theVal = null;
+          }
+          else{
+            if (theVal == 'True'){
+              theVal = true;
+            }
+            else if (theVal == 'False'){
+              theVal = false;
+            }
+          }
+        }
+        else{
+          theVal = $(elem).val();
+        }
+        return theVal;
+      }
       window.daTurnOnControl = function(){
         //console.log("Turning on control");
         daSendChanges = true;
@@ -10242,8 +10409,7 @@ def observer():
         }
       }
       function url_action(action, args){
-          //console.log("Got to a url_action");
-          //redo
+          //redo?
           if (args == null){
               args = {};
           }
@@ -10251,7 +10417,7 @@ def observer():
           return '?action=' + encodeURIComponent(btoa(JSON.stringify(data)));
       }
       function url_action_call(action, args, callback){
-          //redo
+          //redo?
           if (args == null){
               args = {};
           }
@@ -10335,6 +10501,13 @@ def observer():
         });
       }
       function daInitialize(doScroll){
+        if (daSpinnerTimeout != null){
+          clearTimeout(daSpinnerTimeout);
+          daSpinnerTimeout = null;
+        }
+        if (daShowingSpinner){
+          daHideSpinner();
+        }
         $('button[type="submit"], input[type="submit"], a.review-action, #backToQuestion, #questionlabel, #pagetitle, #helptoggle, a[data-linknum], a[data-embaction], #backbutton').click(daSubmitter);
         $(".to-labelauty").labelauty({ class: "labelauty fullwidth" });
         $(".to-labelauty-icon").labelauty({ label: false });
@@ -11057,8 +11230,9 @@ def monitor():
           }
           delete daSessions[key];
       }
-      function daPublishChatLog(uid, yaml_filename, userid, mode, messages){
+      function daPublishChatLog(uid, yaml_filename, userid, mode, messages, scroll){
           //console.log("daPublishChatLog with " + uid + " " + yaml_filename + " " + userid + " " + mode + " " + messages);
+          //console.log("daPublishChatLog: scroll is " + scroll);
           var keys; 
           //if (mode == 'peer' || mode == 'peerhelp'){
           //    keys = daAllSessions(uid, yaml_filename);
@@ -11070,20 +11244,25 @@ def monitor():
               key = keys[i];
               var skey = key.replace(/(:|\.|\[|\]|,|=|\/)/g, '\\\\$1');
               var chatArea = $("#chatarea" + skey).find('ul').first();
+              if (messages.length > 0){
+                $(chatArea).removeClass('invisible');
+              }
               for (var i = 0; i < messages.length; ++i){
                   var message = messages[i];
                   var newLi = document.createElement('li');
                   $(newLi).addClass("list-group-item");
                   if (message.is_self){
-                      $(newLi).addClass("list-group-item-warning dalistright");
+                      $(newLi).addClass("list-group-item-primary dalistright");
                   }
                   else{
-                      $(newLi).addClass("list-group-item-info");
+                      $(newLi).addClass("list-group-item-secondary dalistleft");
                   }
                   $(newLi).html(message.message);
                   $(newLi).appendTo(chatArea);
               }
-              daScrollChatFast("#chatarea" + skey);
+              if (messages.length > 0 && scroll){
+                  daScrollChatFast("#chatarea" + skey);
+              }
           }
       }
       function daCheckIfEmpty(){
@@ -11155,7 +11334,7 @@ def monitor():
               $(theIframeContainer).appendTo($(theListElement));
               var theChatArea = document.createElement('div');
               $(theChatArea).addClass('monitor-chat-area invisible');
-              $(theChatArea).html('<div class="row"><div class="col-md-12"><ul class="list-group dachatbox" id="daCorrespondence"><\/ul><\/div><\/div><form autocomplete="off"><div class="row"><div class="col-md-12"><div class="input-group"><input type="text" class="form-control" disabled=""><span class="input-group-btn"><button role="button" class="btn btn-secondary" type="button" disabled=""><span>""" + word("Send") + """<\/span><\/button><\/span><\/div><\/div><\/div><\/form>');
+              $(theChatArea).html('<div class="row"><div class="col-md-12"><ul class="list-group dachatbox" id="daCorrespondence"><\/ul><\/div><\/div><form autocomplete="off"><div class="row"><div class="col-md-12"><div class="input-group"><input type="text" class="form-control daChatMessage" disabled=""><button role="button" class="btn btn-secondary daChatButton" type="button" disabled="">""" + word("Send") + """<\/button><\/div><\/div><\/div><\/form>');
               $(theChatArea).attr('id', 'chatarea' + key);
               var submitter = function(){
                   //console.log("I am the submitter and I am submitting " + key);
@@ -11494,7 +11673,7 @@ def monitor():
                   daUpdateMonitor();
               });
               daSocket.on('terminate', function() {
-                  //console.log("monitor: terminating socket");
+                  console.log("monitor: terminating socket");
                   daSocket.disconnect();
               });
               daSocket.on('disconnect', function() {
@@ -11523,7 +11702,7 @@ def monitor():
               });
               daSocket.on('chat_log', function(arg) {
                   //console.log('chat_log: ' + arg.userid);
-                  daPublishChatLog(arg.uid, arg.i, arg.userid, arg.mode, arg.data);
+                  daPublishChatLog(arg.uid, arg.i, arg.userid, arg.mode, arg.data, arg.scroll);
               });            
               daSocket.on('block', function(arg) {
                   //console.log("back from blocking " + arg.key);
@@ -11550,10 +11729,10 @@ def monitor():
                     var newLi = document.createElement('li');
                     $(newLi).addClass("list-group-item");
                     if (data.data.is_self){
-                      $(newLi).addClass("list-group-item-warning dalistright");
+                      $(newLi).addClass("list-group-item-primary dalistright");
                     }
                     else{
-                      $(newLi).addClass("list-group-item-info");
+                      $(newLi).addClass("list-group-item-secondary dalistleft");
                     }
                     $(newLi).html(data.data.message);
                     $(newLi).appendTo(chatArea);
@@ -16648,7 +16827,7 @@ def utilities():
         $(this).next('.custom-file-label').html(fileName);
       });
     </script>"""
-    return render_template('pages/utilities.html', extra_js=Markup(extra_js), version_warning=version_warning, bodyclass='adminbody', tab_title=word("Utilities"), page_title=word("Utilities"), form=form, fields=fields_output, word_box=word_box, uses_null=uses_null, file_type=file_type, language_placeholder=word("Enter an ISO-639-1 language code (e.g., es, fr, it)"))
+    return render_template('pages/utilities.html', extra_js=Markup(extra_js), version_warning=version_warning, bodyclass='adminbody', tab_title=word("Utilities"), page_title=word("Utilities"), form=form, fields=fields_output, word_box=word_box, uses_null=uses_null, file_type=file_type, interview_placeholder=word("E.g., docassemble.demo:data/questions/questions.yml"), language_placeholder=word("E.g., es, fr, it"))
 
 # @app.route('/save', methods=['GET', 'POST'])
 # def save_for_later():
@@ -18624,6 +18803,245 @@ def get_user_list(include_inactive=False):
         user_list.append(user_info)
     return user_list
 
+@app.route('/translation_file', methods=['POST'])
+@login_required
+@roles_required(['admin', 'developer'])
+def translation_file():
+    form = Utilities(request.form)
+    yaml_filename = form.interview.data
+    if yaml_filename is None or not re.search(r'\S', yaml_filename):
+        flash(word("You must provide an interview filename"), 'error')
+        return redirect(url_for('utilities'))
+    tr_lang = form.language.data
+    if tr_lang is None or not re.search(r'\S', tr_lang):
+        flash(word("You must provide a language"), 'error')
+        return redirect(url_for('utilities'))
+    temp_file = tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False)
+    xlsx_filename = docassemble.base.functions.space_to_underscore(os.path.splitext(os.path.basename(re.sub(r'.*:', '', yaml_filename)))[0]) + "_" + tr_lang + ".xlsx"
+    workbook = xlsxwriter.Workbook(temp_file.name)
+    worksheet = workbook.add_worksheet()
+    bold = workbook.add_format({'bold': 1})
+    text = workbook.add_format()
+    text.set_align('top')
+    fixedcell = workbook.add_format()
+    fixedcell.set_align('top')
+    fixedcell.set_text_wrap()
+    fixedunlockedcell = workbook.add_format()
+    fixedunlockedcell.set_align('top')
+    fixedunlockedcell.set_text_wrap()
+    fixedunlockedcell.set_locked(False)
+    fixed = workbook.add_format()
+    fixedone = workbook.add_format()
+    fixedone.set_bold()
+    fixedone.set_font_color('green')
+    fixedtwo = workbook.add_format()
+    fixedtwo.set_bold()
+    fixedtwo.set_font_color('blue')
+    fixedunlocked = workbook.add_format()
+    fixedunlockedone = workbook.add_format()
+    fixedunlockedone.set_bold()
+    fixedunlockedone.set_font_color('green')
+    fixedunlockedtwo = workbook.add_format()
+    fixedunlockedtwo.set_bold()
+    fixedunlockedtwo.set_font_color('blue')
+    wholefixed = workbook.add_format()
+    wholefixed.set_align('top')
+    wholefixed.set_text_wrap()
+    wholefixedone = workbook.add_format()
+    wholefixedone.set_bold()
+    wholefixedone.set_font_color('green')
+    wholefixedone.set_align('top')
+    wholefixedone.set_text_wrap()
+    wholefixedtwo = workbook.add_format()
+    wholefixedtwo.set_bold()
+    wholefixedtwo.set_font_color('blue')
+    wholefixedtwo.set_align('top')
+    wholefixedtwo.set_text_wrap()
+    wholefixedunlocked = workbook.add_format()
+    wholefixedunlocked.set_align('top')
+    wholefixedunlocked.set_text_wrap()
+    wholefixedunlocked.set_locked(False)
+    wholefixedunlockedone = workbook.add_format()
+    wholefixedunlockedone.set_bold()
+    wholefixedunlockedone.set_font_color('green')
+    wholefixedunlockedone.set_align('top')
+    wholefixedunlockedone.set_text_wrap()
+    wholefixedunlockedone.set_locked(False)
+    wholefixedunlockedtwo = workbook.add_format()
+    wholefixedunlockedtwo.set_bold()
+    wholefixedunlockedtwo.set_font_color('blue')
+    wholefixedunlockedtwo.set_align('top')
+    wholefixedunlockedtwo.set_text_wrap()
+    wholefixedunlockedtwo.set_locked(False)
+    numb = workbook.add_format()
+    numb.set_align('top')
+    worksheet.write('A1', 'interview', bold)
+    worksheet.write('B1', 'question_id', bold)
+    worksheet.write('C1', 'index_num', bold)
+    worksheet.write('D1', 'hash', bold)
+    worksheet.write('E1', 'orig_lang', bold)
+    worksheet.write('F1', 'tr_lang', bold)
+    worksheet.write('G1', 'orig_text', bold)
+    worksheet.write('H1', 'tr_text', bold)
+    options = {
+        'objects':               False,
+        'scenarios':             False,
+        'format_cells':          False,
+        'format_columns':        False,
+        'format_rows':           False,
+        'insert_columns':        False,
+        'insert_rows':           True,
+        'insert_hyperlinks':     False,
+        'delete_columns':        False,
+        'delete_rows':           True,
+        'select_locked_cells':   True,
+        'sort':                  True,
+        'autofilter':            True,
+        'pivot_tables':          False,
+        'select_unlocked_cells': True,
+    }
+    worksheet.protect('', options)
+    worksheet.set_column(0, 0, 25)
+    worksheet.set_column(1, 1, 15)
+    worksheet.set_column(2, 2, 12)
+    worksheet.set_column(6, 6, 75)
+    worksheet.set_column(6, 7, 75)
+    try:
+        interview_source = docassemble.base.parse.interview_source_from_string(yaml_filename)
+    except DAError:
+        flash(word("Invalid interview"), 'error')
+        return redirect(url_for('utilities'))
+    interview_source.update()
+    interview_source.translating = True
+    interview = interview_source.get_interview()
+    tr_cache = dict()
+    if len(interview.translations):
+        for item in interview.translations:
+            the_xlsx_file = docassemble.base.functions.package_data_filename(item)
+            if not os.path.isfile(the_xlsx_file):
+                continue
+            df = pandas.read_excel(the_xlsx_file)
+            invalid = False
+            for column_name in ('interview', 'question_id', 'index_num', 'hash', 'orig_lang', 'tr_lang', 'orig_text', 'tr_text'):
+                if column_name not in df.columns:
+                    invalid = True
+                    break
+            if invalid:
+                continue
+            for indexno in df.index:
+                try:
+                    assert df['interview'][indexno]
+                    assert df['question_id'][indexno]
+                    assert df['index_num'][indexno] >= 0
+                    assert df['hash'][indexno]
+                    assert df['orig_lang'][indexno]
+                    assert df['tr_lang'][indexno]
+                    assert df['orig_text'][indexno] != ''
+                    assert df['tr_text'][indexno] != ''
+                except:
+                    continue
+                the_dict = {'interview': df['interview'][indexno], 'question_id': df['question_id'][indexno], 'index_num': df['index_num'][indexno], 'hash': df['hash'][indexno], 'orig_lang': df['orig_lang'][indexno], 'tr_lang': df['tr_lang'][indexno], 'orig_text': df['orig_text'][indexno], 'tr_text': df['tr_text'][indexno]}
+                if df['orig_text'][indexno] not in tr_cache:
+                    tr_cache[df['orig_text'][indexno]] = dict()
+                if df['orig_lang'][indexno] not in tr_cache[df['orig_text'][indexno]]:
+                    tr_cache[df['orig_text'][indexno]][df['orig_lang'][indexno]] = dict()
+                tr_cache[df['orig_text'][indexno]][df['orig_lang'][indexno]][df['tr_lang'][indexno]] = the_dict
+    row = 1
+    seen = list()
+    for question in interview.questions_list:
+        if not hasattr(question, 'translations'):
+            continue
+        language = question.language
+        if language == '*':
+            language = interview_source.language
+        if language == '*':
+            language = DEFAULT_LANGUAGE
+        if language == tr_lang:
+            continue
+        indexno = 0
+        if hasattr(question, 'id'):
+            question_id = question.id
+        else:
+            question_id = question.name
+        for item in question.translations:
+            if item in seen:
+                continue
+            if item in tr_cache and language in tr_cache[item] and tr_lang in tr_cache[item][language]:
+                tr_text = text_type(tr_cache[item][language][tr_lang]['tr_text'])
+            else:
+                tr_text = ''
+            worksheet.write_string(row, 0, question.from_source.get_name(), text)
+            worksheet.write_string(row, 1, question_id, text)
+            worksheet.write_number(row, 2, indexno, numb)
+            worksheet.write_string(row, 3, hashlib.md5(item.encode('utf-8')).hexdigest(), text)
+            worksheet.write_string(row, 4, language, text)
+            worksheet.write_string(row, 5, tr_lang, text)
+            mako = mako_parts(item)
+            if len(mako) == 1:
+                if mako[0][1] == 0:
+                    worksheet.write_string(row, 6, item, wholefixed)
+                elif mako[0][1] == 1:
+                    worksheet.write_string(row, 6, item, wholefixedone)
+                elif mako[0][1] == 2:
+                    worksheet.write_string(row, 6, item, wholefixedtwo)
+            else:
+                parts = [row, 6]
+                for part in mako:
+                    if part[1] == 0:
+                        parts.extend([fixed, part[0]])
+                    elif part[1] == 1:
+                        parts.extend([fixedone, part[0]])
+                    elif part[1] == 2:
+                        parts.extend([fixedtwo, part[0]])
+                parts.append(fixedcell)
+                worksheet.write_rich_string(*parts)
+            mako = mako_parts(tr_text)
+            if len(mako) == 1:
+                if mako[0][1] == 0:
+                    worksheet.write_string(row, 7, tr_text, wholefixedunlocked)
+                elif mako[0][1] == 1:
+                    worksheet.write_string(row, 7, tr_text, wholefixedunlockedone)
+                elif mako[0][1] == 2:
+                    worksheet.write_string(row, 7, tr_text, wholefixedunlockedtwo)
+            else:
+                parts = [row, 7]
+                for part in mako:
+                    if part[1] == 0:
+                        parts.extend([fixedunlocked, part[0]])
+                    elif part[1] == 1:
+                        parts.extend([fixedunlockedone, part[0]])
+                    elif part[1] == 2:
+                        parts.extend([fixedunlockedtwo, part[0]])
+                parts.append(fixedunlockedcell)
+                worksheet.write_rich_string(*parts)
+            num_lines = item.count('\n')
+            if num_lines > 25:
+                num_lines = 25
+            if num_lines > 0:
+                worksheet.set_row(row, 15*(num_lines + 1))
+            indexno += 1
+            row += 1
+            seen.append(item)
+    for item in tr_cache:
+        if item in seen or language not in tr_cache[item] or tr_lang not in tr_cache[item][language]:
+            continue
+        worksheet.write_string(row, 0, tr_cache[item][language][tr_lang]['interview'], text)
+        worksheet.write_string(row, 1, tr_cache[item][language][tr_lang]['question_id'], text)
+        worksheet.write_number(row, 2, 1000 + tr_cache[item][language][tr_lang]['index_num'], numb)
+        worksheet.write_string(row, 3, tr_cache[item][language][tr_lang]['hash'], text)
+        worksheet.write_string(row, 4, tr_cache[item][language][tr_lang]['orig_lang'], text)
+        worksheet.write_string(row, 5, tr_cache[item][language][tr_lang]['tr_lang'], text)
+        worksheet.write_string(row, 6, tr_cache[item][language][tr_lang]['orig_text'], fixed)
+        worksheet.write_string(row, 7, tr_cache[item][language][tr_lang]['tr_text'], fixedunlocked)
+        num_lines = tr_cache[item][language][tr_lang]['orig_text'].count('\n')
+        if num_lines > 0:
+            worksheet.set_row(row, 15*(num_lines + 1))
+        row += 1
+    workbook.close()
+    response = send_file(temp_file.name, mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', as_attachment=True, attachment_filename=xlsx_filename)
+    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, post-check=0, pre-check=0, max-age=0'
+    return(response)
+
 @app.route('/api/user_list', methods=['GET'])
 @crossdomain(origin='*', methods=['GET', 'HEAD'])
 def api_user_list():
@@ -20404,6 +20822,139 @@ def illegal_variable_name(var):
     detector = docassemble.base.astparser.detectIllegal()
     detector.visit(t)
     return detector.illegal
+
+emoji_match = re.compile(r':([A-Za-z][A-Za-z0-9\_\-]+):')
+
+def mako_parts(expression):
+    in_percent = False
+    in_var = False
+    in_square = False
+    var_depth = 0
+    in_colon = 0
+    in_pre_bracket = False
+    in_post_bracket = False
+    n = len(expression)
+    output = list()
+    current = ''
+    i = 0
+    expression = emoji_match.sub(r'^^\1^^', expression)
+    while i < n:
+        if in_percent:
+            if expression[i] in ["\n", "\r"]:
+                in_percent = False
+                if current != '':
+                    output.append([current, 1])
+                current = expression[i]
+                i += 1
+                continue
+        elif in_var:
+            if expression[i] == '{' and expression[i-1] != "\\":
+                var_depth += 1
+            elif expression[i] == '}' and expression[i-1] != "\\":
+                var_depth -= 1
+                if var_depth == 0:
+                    current += expression[i]
+                    if current != '':
+                        output.append([current, 2])
+                    current = ''
+                    in_var = False
+                    i += 1
+                    continue
+        elif in_pre_bracket:
+            if i + 2 < n:
+                if expression[i:i+3] == '</%':
+                    in_pre_bracket = False
+                    in_post_bracket = True
+                    current += expression[i:i+3]
+                    i += 3
+                    continue
+            if i + 1 < n and expression[i:i+2] == '%>':
+                in_pre_bracket = False
+                current += expression[i:i+2]
+                if current != '':
+                    output.append([current, 1])
+                current = ''
+                i += 2
+                continue
+        elif in_post_bracket:
+            if expression[i] == '>' and expression[i-1] != "\\":
+                current += expression[i]
+                if current != '':
+                    output.append([current, 1])
+                current = ''
+                in_post_bracket = False
+                i += 1
+                continue
+        elif in_square:
+            if expression[i] == ']' and (i == 0 or expression[i-1] != "\\"):
+                mode = 0
+                current += expression[i]
+                for pattern in ['[FILE', '[TARGET ', '[EMOJI ', '[QR ', '[YOUTUBE', '[VIMEO]', '[PAGENUM]', '[BEGIN_TWOCOL]', '[BREAK]', '[END_TWOCOL', '[BEGIN_CAPTION]', '[VERTICAL_LINE]', '[END_CAPTION]', '[TIGHTSPACING]', '[SINGLESPACING]', '[DOUBLESPACING]', '[ONEANDAHALFSPACING]', '[TRIPLESPACING]', '[START_INDENTATION]', '[STOP_INDENTATION]', '[NBSP]', '[REDACTION', '[ENDASH]', '[EMDASH]', '[HYPHEN]', '[CHECKBOX]', '[BLANK]', '[BLANKFILL]', '[PAGEBREAK]', '[PAGENUM]', '[SECTIONNUM]', '[SKIPLINE]', '[NEWLINE]', '[NEWPAR]', '[BR]', '[TAB]', '[END]', '[BORDER]', '[NOINDENT]', '[FLUSHLEFT]', '[FLUSHRIGHT]', '[CENTER]', '[BOLDCENTER]', '[INDENTBY', '[${']:
+                    if current.startswith(pattern):
+                        mode = 2
+                        break
+                if current != '':
+                    output.append([current, mode])
+                current = ''
+                in_square = False
+                i += 1
+                continue
+        elif in_colon:
+            if i + 1 < n and expression[i:i+2] == '^^':
+                current += ':'
+                if current != '':
+                    output.append([current, 2])
+                current = ''
+                in_colon = False
+                i += 2
+                continue
+        elif i + 1 < n:
+            if expression[i:i+2] == '${':
+                in_var = True
+                var_depth += 1
+                if current != '':
+                    output.append([current, 0])
+                current = expression[i:i+2]
+                i += 2
+                continue
+            elif expression[i:i+2] == '^^':
+                in_colon = True
+                if current != '':
+                    output.append([current, 0])
+                current = ':'
+                i += 2
+                continue
+            elif expression[i:i+2] == '<%':
+                in_pre_bracket = True
+                if current != '':
+                    output.append([current, 0])
+                current = expression[i:i+2]
+                i += 2
+                continue
+            elif expression[i:i+2] == '% ' and (i == 0 or (expression[i-1] in ["\n", "\r"])):
+                in_percent = True
+                if current != '':
+                    output.append([current, 0])
+                current = expression[i:i+2]
+                i += 2
+                continue
+            elif expression[i] == '[' and (i == 0 or expression[i-1] != "\\"):
+                in_square = True
+                if current != '':
+                    output.append([current, 0])
+                current = expression[i]
+                i += 1
+                continue
+        current += expression[i]
+        i += 1
+    if current != '':
+        if in_pre_bracket or in_post_bracket or in_percent:
+            output.append([current, 1])
+        elif in_var:
+            output.append([current, 2])
+        else:
+            output.append([current, 0])
+    return output
 
 def error_notification(err, message=None, history=None, trace=None, referer=None, the_request=None, the_vars=None):
     recipient_email = daconfig.get('error notification email', None)
